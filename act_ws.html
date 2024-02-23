@@ -190,8 +190,9 @@
                         <div :style="{display:actor_dialog.action_chart.selected?'block':'none'}">
                             <canvas :ref="el => { actor_dialog.action_chart.canvas = el }" :height="screen.height*0.5"></canvas>
                         </div>
-                        <el-table :data="actor_dialog.actor.actions" style="width: 100%" :height="actor_dialog.action_chart.selected?screen.height*0.3:screen.height*0.5" :default-sort="{ prop: 'damage', order: 'descending' }">
-                            <el-table-column prop="display_name">
+                        <el-checkbox v-model="actor_dialog.actor.should_split_by_traits.flag">{{ $t('ui.split_traits') }}</el-checkbox>
+                        <el-table :data="actor_dialog.actor.view_actions" style="width: 100%" :height="actor_dialog.action_chart.selected?screen.height*0.3:screen.height*0.5" :default-sort="{ prop: 'damage', order: 'descending' }">
+                            <el-table-column prop="display_name" sortable>
                                 <template #header>
                                     <span>{{$t('ui.name')}}</span>
                                     <el-popover v-if="actor_dialog.actor.action_desc" placement="right" :content="actor_dialog.actor.action_desc">
@@ -217,6 +218,7 @@
                                     </el-popover>
                                 </template>
                             </el-table-column>
+                            <el-table-column v-if="actor_dialog.actor.should_split_by_traits.flag" prop="traits" :label="$t('ui.traits')"></el-table-column>
                             <el-table-column prop="hit" :label="$t('ui.hit')" sortable>
                                 <template #default="scope">
                                     <span>{{numberWithComma(scope.row.hit)}} ({{(scope.row.hit/actor_dialog.actor.hit*100).toFixed(1)}}%)</span>
@@ -237,9 +239,14 @@
                                     <span>{{numberWithComma(scope.row.max)}}</span>
                                 </template>
                             </el-table-column>
-                            <el-table-column :label="$t('ui.damage_avg')">
+                            <el-table-column :label="$t('ui.damage_avg')" sortable>
                                 <template #default="scope">
                                     <span v-if="scope.row.hit > 0">{{numberWithComma(Math.floor(scope.row.damage / scope.row.hit))}}</span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column :label="$t('ui.damage_history')" width="120px">
+                                <template #default="scope">
+                                    <el-button @click="copy_clipboard_damage_history(scope.row.damage_history)" type="text" size="small">{{ $t('ui.copy') }}</el-button>
                                 </template>
                             </el-table-column>
                         </el-table>
@@ -368,6 +375,15 @@
 
     let socket = null;
 
+    function are_traits_equal(a, b) {
+        return this.are_sets_equivalent(new Set(a), new Set(b));
+    }
+
+    function are_sets_equivalent(a, b) {
+        return a.size === b.size &&
+            [...a].every((x) => b.has(x));
+    }
+
     function numberToHexStringWithZFill(number, minLength) {
         let hexString = number.toString(16);
         while (hexString.length < minLength) {
@@ -479,11 +495,6 @@
 
     cdn_loader.then(() => {
         const i18n = VueI18n.createI18n(i18nCfg);
-
-        const evt_action_id = ({flags, action_id}) => {
-            if (flags & (1 << 15)) return -3;
-            return action_id;
-        }
 
         const actor_name = (name_key) => {
             name_key = name_key.toUpperCase();
@@ -616,7 +627,8 @@
                 return res;
             })()
 
-            constructor(actor_key, action_id) {
+            constructor(actor_key, action_id, traits) {
+                this.actor_key = actor_key;
                 this.id = action_id;
                 const key = ActorAction.common_actions[action_id] || `game.actions.${actor_key}.${action_id}`;
                 this.display_name = i18n.global.te(key) ? i18n.global.t(key) : `${action_id}`;
@@ -625,6 +637,26 @@
                 this.damage = 0;
                 this.min = -1;
                 this.max = -1;
+                this.traits = traits;
+                this.damage_history = [];
+            }
+
+            clone() {
+                const clone = new ActorAction(this.actor_key, this.id, this.traits);
+                clone.hit = this.hit;
+                clone.damage = this.damage;
+                clone.min = this.min;
+                clone.max = this.max;
+                clone.damage_history = this.damage_history;
+                return clone;
+            }
+
+            merge(other) {
+                this.hit += other.hit;
+                this.damage += other.damage;
+                this.min = Math.min(this.min, other.min);
+                this.max = Math.max(this.max, other.max);
+                this.damage_history = this.damage_history.concat(other.damage_history);
             }
         }
 
@@ -653,13 +685,32 @@
                 this.dps = 0;
                 this.dps_in_minute = 0;
                 this.targets = [];
-                this.actions = [];
+                this.actions = Vue.reactive([]);
                 this.action_desc = (() => {
                     const key = `game.actions.${this.name_key}.desc`;
                     const res = i18n.global.t(key);
                     return res === key ? "" : res;
                 })();
                 this.hit = 0;
+                this.should_split_by_traits = Vue.reactive({ flag: false });
+                this.view_actions = Vue.computed(() => {
+                   if (this.should_split_by_traits.flag) {
+                       return this.actions;
+                   } else {
+                       const groups = {};
+                       return this.actions.reduce((acc, cur) => {
+                           const existing = groups[cur.id];
+                           if (existing) {
+                               existing.merge(cur);
+                           } else {
+                               const clone = cur.clone();
+                               groups[cur.id] = clone;
+                               acc.push(Vue.reactive(clone));
+                           }
+                           return acc;
+                       }, []);
+                   }
+                });
             }
 
             get_target(data) {
@@ -671,10 +722,12 @@
                 return new_res;
             }
 
-            get_action(action_id) {
-                const res = this.actions.find(v => v.id === action_id);
+            get_action(eventData) {
+                const action_id = eventData.action_id;
+                const traits = eventData.traits;
+                const res = this.actions.find(v => v.id === action_id && are_traits_equal(v.traits, traits));
                 if (res) return res;
-                const new_res = Vue.reactive(new ActorAction(this.name_key, action_id));
+                const new_res = Vue.reactive(new ActorAction(this.name_key, action_id, traits));
                 this.actions.push(new_res);
                 return new_res;
             }
@@ -764,7 +817,7 @@
                             const {source, target, damage, flags} = data;
                             const [source_type, source_idx, source_id, source_party_idx, ..._] = source;
                             const [target_type, target_idx, target_id, target_party_idx, ...__] = target;
-                            const action_id = evt_action_id(data);
+                            const action_id = data.action_id;
                             const date = new Date(time_ms);
                             return `${date.getFullYear()}/${date.getMonth()}/${date.getDay()} ${date.getHours()}:${date.getMinutes()}:${date.getSeconds()}|damage|` +
                                     `${source_type};${source_idx};${numberToHexStringWithZFill(source_id, 8)};${source_party_idx};${actor_name(source_id)}|` +
@@ -814,6 +867,10 @@
                     last_frame: 0,
                 }
                 const export_log = (record) => record.export_log();
+
+                const copy_clipboard_damage_history = (history) => {
+                    return navigator.clipboard.writeText(history.join("\n"));
+                };
 
                 const set_actor_dialog = (actor) => {
                     if (actor) {
@@ -875,12 +932,15 @@
                     actor.damage_in_minute += damage;
                     const target_actor = actor.get_target(target);
                     target_actor.damage += damage;
-                    const action = actor.get_action(evt_action_id(data));
+                    const action = actor.get_action(data);
                     action.hit += 1;
                     action.damage += damage;
+                    action.damage_history = [...action.damage_history, damage];
                     if (action.min === -1 || action.min > damage) action.min = damage;
                     if (action.max === -1 || action.max < damage) action.max = damage;
-                    if (actor_dialog.action_chart.selected === action)
+                    if (actor_dialog.action_chart.selected &&
+                        actor_dialog.action_chart.selected.id === action.id &&
+                        (!actor.should_split_by_traits.flag || are_traits_equal(actor_dialog.action_chart.selected.traits, action.traits)))
                         ActionDamageChart.instance?.put({x: (time_ms - current_record.time_ms) / 1000, y: damage});
                     if (log_cond.damage)
                         log(`${actor.display_name} cause ${damage} damage by ${action.display_name} to ${target_actor.name}`);
@@ -940,7 +1000,7 @@
                         if (!(key in cfg_val)) cfg_val[key] = val;
                     }
                     setdefault('chart', 'dps_min');
-                    setdefault('keep_record', false);
+                    setdefault('keep_record', true);
                     setdefault('main_tbl_cols_display', {});
                     ['damage', 'damage_in_minute', 'dps', 'dps_in_minute', 'detail'].map(k => {
                         if (!(k in cfg_val.main_tbl_cols_display)) cfg_val.main_tbl_cols_display[k] = true;
@@ -985,7 +1045,13 @@
                     }
                     Vue.watch(cfg, (v) => localStorage.setItem('act_ws_cfg', JSON.stringify(v)), {deep: true});
                     Vue.watch(() => i18n.global.locale, i18nCfg.onLocaleChange)
-                    Vue.watch(() => actor_dialog.action_chart.selected, (action) => {
+                    Vue.watch(() => ({
+                        action: actor_dialog.action_chart.selected,
+                        should_split_by_traits: actor_dialog.actor?.should_split_by_traits
+                    }), (newValue) => {
+                        console.log("watch", newValue);
+                        const action = newValue.action;
+                        const flag = newValue.should_split_by_traits?.flag ?? false;
                         if (action && actor_dialog.actor) {
                             let chart = ActionDamageChart.instance;
                             if (!chart) {
@@ -1000,8 +1066,10 @@
                                 if (type !== 'damage') continue;
                                 const {source, damage} = data;
                                 if (source[1] !== actor_dialog.actor.idx) continue;
-                                if (evt_action_id(data) !== action.id) continue;
-                                datas.push({x: (time_ms - record.time_ms) / 1000, y: damage});
+                                if (data.action_id !== action.id) continue;
+                                if (!flag || are_traits_equal(data.traits, action.traits)) {
+                                    datas.push({x: (time_ms - record.time_ms) / 1000, y: damage});
+                                }
                                 if (datas.length >= chart.max_display) break;
                             }
                             chart.set({label: action.display_name, datas: datas.reverse()});
@@ -1009,7 +1077,7 @@
                         } else {
                             ActionDamageChart.instance?.clear();
                         }
-                    })
+                    }, { deep: true })
                     create_socket();
                     update_interval = setInterval(update, 200);
                     window.addEventListener('beforeunload', handleBeforeUnloadStoreRecord);
@@ -1036,6 +1104,7 @@
                     remove_record,
                     actor_dialog,
                     set_actor_dialog,
+                    copy_clipboard_damage_history,
                     numberWithComma,
                     icons: ElementPlusIconsVue,
                 }

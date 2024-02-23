@@ -22,6 +22,8 @@ import time
 import sys
 import typing
 
+from enum import Flag
+
 _NULL = type('NULL', (), {})
 _T = typing.TypeVar('_T')
 
@@ -1847,13 +1849,17 @@ class Act:
         try:
             dmg = i32_from(a2 + 0xd0)
             flags_ = u64_from(a2 + 0xd8)
-            if (1 << 7 | 1 << 50) & flags_:
+            flag = DamageTrait(flags_)
+            if DamageTrait.LINK_1 in flag or DamageTrait.LINK_2 in flag:
                 action_id = -1  # link attack
-            elif (1 << 13 | 1 << 14) & flags_:
+            elif DamageTrait.SBA_1 in flag or DamageTrait.SBA_2 in flag:
                 action_id = -2  # limit break
+            elif DamageTrait.SUPPLEMENTARY_DAMAGE in flag:
+                action_id = -3  # supplementary damage
             else:
                 action_id = u32_from(a2 + 0x154)
-            self._on_damage(source, target, dmg, flags_, action_id)
+            traits = damage_flags_to_traits(flag)
+            self._on_damage(source, target, dmg, flags_, traits, action_id)
         except:
             logging.error('on_process_damage_evt', exc_info=True)
         return res
@@ -1864,7 +1870,7 @@ class Act:
             dmg = i32_from(a2)
             target = size_t_from(size_t_from(a1 + 0x18) + 0x70)
             source = size_t_from(size_t_from(a1 + 0x30) + 0x70)
-            self._on_damage(source, target, dmg, 0, -0x100)
+            self._on_damage(source, target, dmg, 0, [], -0x100)
         except:
             logging.error('on_process_dot_evt', exc_info=True)
         return res
@@ -1883,7 +1889,7 @@ class Act:
         return res
 
     if 1:
-        def _on_damage(self, source, target, damage, flags, action_id):
+        def _on_damage(self, source, target, damage, flags, traits, action_id):
             # TODO: 找个通用方法溯源
             source_type_id = actor_type_id(source)
             if source_type_id == 0x2af678e8:  # 菲莉宝宝 # Pl0700Ghost
@@ -1894,7 +1900,7 @@ class Act:
                 source = size_t_from(size_t_from(source + 0x578) + 0x70)
             elif source_type_id == 0xf5755c0e:  # 龙人化 # Pl2000
                 source = size_t_from(size_t_from(source + 0xD028) + 0x70)
-            return self.on_damage(self.actor_data(source), self.actor_data(target), damage, flags, action_id)
+            return self.on_damage(self.actor_data(source), self.actor_data(target), damage, flags, traits, action_id)
     else:
         def _on_damage(self, source, target, damage, flags, action_id):
             # TODO: 找个通用方法溯源
@@ -1907,9 +1913,9 @@ class Act:
                 source = size_t_from(size_t_from(source + 0x578) + 0x70)
             elif source_base_name == b'Pl2000':  # 龙人化 # Pl2000
                 source = size_t_from(size_t_from(source + 0xD028) + 0x70)
-            return self.on_damage(self.actor_data(source), self.actor_data(target), damage, flags, action_id)
+            return self.on_damage(self.actor_data(source), self.actor_data(target), damage, flags, traits, action_id)
 
-    def on_damage(self, source, target, damage, flags, action_id):
+    def on_damage(self, source, target, damage, flags, traits, action_id):
         pass
 
     def on_enter_area(self):
@@ -1951,13 +1957,102 @@ class Act:
 class TestAct(Act):
     lock = threading.Lock()
 
-    def on_damage(self, source, target, damage, flags, action_id):
+    def on_damage(self, source, target, damage, flags, traits, action_id):
         with self.lock:
-            print(f'{source} -> {target} {action_id=} {damage=} {flags=}')
+            print(f'{source} -> {target} {action_id=} {damage=} {flags=} {traits=}')
 
     def on_enter_area(self):
         with self.lock:
             print('on_enter_area')
+
+
+# The purpose of those "traits" is to try to separate the hits of the same action as much as possible
+class DamageTrait(Flag):
+    NONE = 0
+    _00 = 1 << 0
+    _01 = 1 << 1
+    # Flowery Seven any charge, Fire, Freeze
+    SKILL = 1 << 2
+    _03 = 1 << 3
+    _04 = 1 << 4
+    # came with 0 damage Flowery Seven and Fire
+    NO_DAMAGE = 1 << 5
+    _06 = 1 << 6
+    LINK_1 = 1 << 7
+    _08 = 1 << 8
+    # came with 0 damage Flowery Seven, Io SBA additional hits
+    _09 = 1 << 9
+    _10 = 1 << 10
+    # Io Link last hit
+    _11 = 1 << 11
+    # came with 0 damage Flowery Seven
+    _12 = 1 << 12
+    SBA_1 = 1 << 13
+    SBA_2 = 1 << 14
+    # only on supplementary damage
+    SUPPLEMENTARY_DAMAGE = 1 << 15
+    _16 = 1 << 16
+    # on the damage that triggered supplementary damage and on supplementary damage itself
+    SUPPLEMENTARY_DAMAGE_APPLIED = 1 << 17
+    # Stargaze V, Flowery Seven fully charged, comes with Io Link, Io SBA
+    FULLY_CHARGED = 1 << 18
+    # Stargaze V, Io Link
+    _19 = 1 << 19
+    # maybe normal, together with _25, Io Attack, Stargaze, Freeze, Fire Ranged part, but Flowery Seven is ranged without it, Io Link
+    RANGE_1 = 1 << 20
+    _21 = 1 << 21
+    _22 = 1 << 22
+    _23 = 1 << 23
+    _24 = 1 << 24
+    # maybe normal, together with _20, Io Attack, Stargaze, Freeze, Fire Ranged part, but Flowery Seven is ranged without it, Io Link
+    RANGE_2 = 1 << 25
+    # came with 0 damage Flowery Seven and Fire, Gravity Well
+    _26 = 1 << 26
+    _27 = 1 << 27
+    _28 = 1 << 28
+    _29 = 1 << 29
+    # came with 0 damage Gravity Well
+    _30 = 1 << 30
+    _31 = 1 << 31
+    _32 = 1 << 32
+    _33 = 1 << 33
+    _34 = 1 << 34
+    # Flowery Seven fully charged
+    _35 = 1 << 35
+    _36 = 1 << 36
+    _37 = 1 << 37
+    _38 = 1 << 38
+    _39 = 1 << 39
+    _40 = 1 << 40
+    _41 = 1 << 41
+    _42 = 1 << 42
+    _43 = 1 << 43
+    _44 = 1 << 44
+    _45 = 1 << 45
+    _46 = 1 << 46
+    _47 = 1 << 47
+    _48 = 1 << 48
+    _49 = 1 << 49
+    LINK_2 = 1 << 50
+    _51 = 1 << 51
+    _52 = 1 << 52
+    # maybe charged
+    CHARGED = 1 << 53
+    _54 = 1 << 54
+    _55 = 1 << 55
+    _56 = 1 << 56
+    _57 = 1 << 57
+    _58 = 1 << 58
+    _59 = 1 << 59
+    _60 = 1 << 60
+    _61 = 1 << 61
+    _62 = 1 << 62
+    _63 = 1 << 63
+    _64 = 1 << 64
+
+
+def damage_flags_to_traits(flag):
+    return [x.name for x in DamageTrait if flag.value & x.value]
 
 
 def injected_main():
