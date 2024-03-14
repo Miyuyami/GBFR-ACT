@@ -554,12 +554,12 @@ class IPatternScanner:
         try:
             res = next(s)
         except StopIteration:
-            raise KeyError('pattern not found')
+            raise KeyError(f'pattern {pattern} not found')
         try:
             next(s)
         except StopIteration:
             return res
-        raise KeyError('pattern is not unique, at least 2 is found')
+        raise KeyError(f'pattern {pattern} is not unique, at least 2 is found')
 
     def find_addresses(self, pattern: str | Pattern):
         for address, _ in self.search(pattern):
@@ -1767,6 +1767,22 @@ class Actor:
     _get_type_name = VFunc(ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t), 0x50)
     _get_type_id = VFunc(ctypes.CFUNCTYPE(ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t), 0x58)
 
+    class Sigil(ctypes.Structure):
+        _fields_ = [
+            ('first_trait_id', ctypes.c_uint32),
+            ('first_trait_level', ctypes.c_uint32),
+            ('second_trait_id', ctypes.c_uint32),
+            ('second_trait_level', ctypes.c_uint32),
+            ('sigil_id', ctypes.c_uint32),
+            ('equipped_character', ctypes.c_uint32),
+            ('sigil_level', ctypes.c_uint32),
+            ('acquisition_count', ctypes.c_uint32),
+            ('notification_enum', ctypes.c_uint32),
+        ]
+
+    class Offsets:
+        p_data_off = 0
+
     def __str__(self):
         return f"{self.type_name}#{self.address:x}"
 
@@ -1804,6 +1820,55 @@ class Actor:
                 return Actor(size_t_from(size_t_from(self.address + 0x578) + 0x70))
             case 0xf5755c0e:  # 龙人化 # Pl2000
                 return Actor(size_t_from(size_t_from(self.address + 0xD028) + 0x70))
+
+    @property
+    def canceled_action(self):
+        return u32_from(self.address + 0xbff8)
+
+    # only for player?
+    @property
+    def p_data(self):
+        assert self.Offsets.p_data_off
+        return size_t_from(self.address + self.Offsets.p_data_off)
+
+    @property
+    def sigils(self):
+        p_data = self.p_data
+        size_t_from(p_data)  # test address
+        return (self.Sigil * 12).from_address(p_data)
+
+    @property
+    def is_online(self):
+        return u32_from(self.p_data + 0x1c8)
+
+    @property
+    def c_name(self):
+        return ctypes.string_at(self.p_data + 0x1e8, 0x10).split(b'\0', 1)[0].decode('utf-8')
+
+    @property
+    def d_name(self):
+        return ctypes.string_at(self.p_data + 0x208, 0x10).split(b'\0', 1)[0].decode('utf-8')
+
+    @property
+    def party_index(self):
+        return u32_from(self.p_data + 0x230)
+
+    def member_info(self):
+        return {
+            'sigils': [
+                {
+                    'first_trait_id': s.first_trait_id,
+                    'first_trait_level': s.first_trait_level,
+                    'second_trait_id': s.second_trait_id,
+                    'second_trait_level': s.second_trait_level,
+                    'sigil_id': s.sigil_id,
+                    'sigil_level': s.sigil_level,
+                } for s in self.sigils
+            ],
+            'is_online': self.is_online,
+            'c_name': self.c_name,
+            'd_name': self.d_name,
+        }
 
 
 class ProcessDamageSource:
@@ -1867,23 +1932,30 @@ class Act:
         ])
 
         p_on_enter_area, = scanner.find_val('e8 * * * * c5 ? ? ? c5 f8 29 45 ? c7 45 ? ? ? ? ?')
-        self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_size_t, [
+        self.on_enter_area_hook = Hook(p_on_enter_area, self._on_enter_area, ctypes.c_uint64, [
             ctypes.c_uint,
-            ctypes.c_size_t,
-            ctypes.c_uint8
+            ctypes.c_uint64,
+            ctypes.c_uint64,
+            ctypes.c_uint64,
         ])
 
-        self.p_qword_1467572B0, = scanner.find_val("48 ? ? * * * * 83 66 ? ? 48 ? ?")
+        self.p_qword_1467572B0, = scanner.find_val("48 ? ? * * * * 44 89 48")
+
+        p_data_off1, = scanner.find_val("48 ? ? <? ? ? ?> 89 86 ? ? ? ? 44 89 96")
+        p_data_off2, = scanner.find_val("49 89 84 24 <? ? ? ?> 48 ? ? 74 ? 49 ? ? ? ? ? ? ? 48 89 43 ? ")
+        Actor.Offsets.p_data_off = p_data_off1 + p_data_off2
 
         self.i_ui_comp_name = ctypes.CFUNCTYPE(ctypes.c_char_p, ctypes.c_size_t)
         self.team_map = None
+        self.member_info = None
 
     def actor_data(self, actor: Actor):
         return actor.type_name, actor.idx, actor.type_id, self.team_map.get(actor.address, -1) if self.team_map else -1
 
     def build_team_map(self):
         if self.team_map is not None: return
-        res = {}
+        self.team_map = {}
+        self.member_info = [None, None, None, None, None, ]
         qword_1467572B0 = size_t_from(self.p_qword_1467572B0)
         p_party_base = size_t_from(qword_1467572B0 + 0x20)
         p_party_tbl = size_t_from(p_party_base + 0x10 * (size_t_from(qword_1467572B0 + 0x38) & 0x6C4F1B4D) + 8)
@@ -1893,11 +1965,15 @@ class Act:
             for i, p_data in enumerate(range(party_start, party_end, 0x10)):
                 a1 = size_t_from(p_data + 8)
                 if (self.i_ui_comp_name(v_func(a1, 0x8))(a1) == b'ui::component::ControllerPlParameter01' and
-                        (p_actor := size_t_from(a1 + 0x5D0))):
+                        (p_actor := size_t_from(a1 + 0x5f8))):
                     p_actor_data = size_t_from(p_actor + 0x70)
-                    res[p_actor_data] = i
+                    self.team_map[p_actor_data] = i
+                    actor = Actor(p_actor_data)
+                    self.member_info[i] = actor.member_info() | {
+                        'common_info': self.actor_data(actor)
+                    }
                     print(f'[{i}] {p_actor=:#x}')
-        self.team_map = res
+        self.on_load_party(self.member_info)
 
     def _on_process_damage_evt(self, hook, p_target_evt, p_source_evt, a3, a4):
         source_evt = ProcessDamageSource(p_source_evt)
@@ -1911,6 +1987,7 @@ class Act:
         res = hook.original(p_target_evt, p_source_evt, a3, a4)  # return 0 if it is non processed damage event
         if not (res and target and source): return res  # or if get target or source failed
         try:
+            source = source.parent or source
             flags_ = source_evt.flags
             flag = DamageTrait(flags_)
             if DamageTrait.LINK_1 in flag or DamageTrait.LINK_2 in flag:
@@ -1921,6 +1998,8 @@ class Act:
                 action_id = -3  # supplementary damage
             else:
                 action_id = source_evt.action_id
+                if action_id == 0xFFFFFFFF:
+                    action_id = source.canceled_action
             traits = damage_flags_to_traits(flag)
             self._on_damage(source, target, source_evt.damage, flags_, traits, action_id)
         except:
@@ -1931,27 +2010,31 @@ class Act:
         res = hook.original(a1, a2)
         try:
             dmg = i32_from(a2)
-            target = size_t_from(size_t_from(a1 + 0x18) + 0x70)
-            source = size_t_from(size_t_from(a1 + 0x30) + 0x70)
-            self._on_damage(Actor(source), Actor(target), dmg, 0, [], -0x100)
+            target = Actor(size_t_from(size_t_from(a1 + 0x18) + 0x70))
+            source = Actor(size_t_from(size_t_from(a1 + 0x30) + 0x70))
+            source = source.parent or source
+            self._on_damage(source, target, dmg, 0, [], -0x100)
         except:
             logging.error('on_process_dot_evt', exc_info=True)
         return res
 
-    def _on_enter_area(self, hook, a1, a2, a3):
-        res = hook.original(a1, a2, a3)
+    def _on_enter_area(self, hook, *a):
+        res = hook.original(*a)
         try:
             self.team_map = None
+            self.member_info = None
             self.on_enter_area()
         except:
             logging.error('on_enter_area', exc_info=True)
         return res
 
     def _on_damage(self, source, target, damage, flags, traits, action_id):
-        source = source.parent or source
         return self.on_damage(self.actor_data(source), self.actor_data(target), damage, flags, traits, action_id)
 
     def on_damage(self, source, target, damage, flags, traits, action_id):
+        pass
+
+    def on_load_party(self, datas):
         pass
 
     def on_enter_area(self):
@@ -2093,6 +2176,10 @@ def injected_main():
         def on_enter_area(self):
             with self.lock:
                 print('on_enter_area')
+
+        def on_load_party(self, datas):
+            with self.lock:
+                print('on_load_party', datas)
 
     TestAct.reload()
     print('Act installed')
