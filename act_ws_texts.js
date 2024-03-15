@@ -71,6 +71,7 @@ const i18nCfg = (() => {
                     damage_filter_desc: "过滤(包含)",
                     actor_name: "角色名",
                     user_name: "用户名",
+                    weapon: "武器",
                     sigils: "因子",
                 },
                 game: {
@@ -459,16 +460,16 @@ const i18nCfg = (() => {
                             "1600": "湮灭斩",
                         },
                         "PL0700": { // 菲莉
-                            "65": "宠物攻击",  //未复现，copy繁中内容
+                            "-16": "宠物攻击",
                             "100": "X",
                             "101": "蓄力X",  //蓄力X和收招使用相同动作ID
-                            "102": "(XX~X)X", // 第三次蓄力X後接X 同時爾後寵物也共用本詞條
+                            "102": "(XX~X)X", // 第三次蓄力X後接X
                             "110": "(X)X",
                             "111": "(X)蓄力X",
-                            "112": "(~X)X", // 第一次蓄力X後接X 同時爾後寵物也共用本詞條
+                            "112": "(~X)X", // 第一次蓄力X後接X
                             "120": "(XX)X",
                             "121": "(XX)蓄力X", // 第二次蓄力X
-                            "122": "(X~X)X", // 第二次蓄力X後接X 同時爾後寵物也共用本詞條
+                            "122": "(X~X)X", // 第二次蓄力X後接X
                             "200": "Y",  //(有无宠物，秒放、按住ID皆相同)
                             "300": "空中连击1",
                             "301": "空中连击2",
@@ -673,7 +674,6 @@ const i18nCfg = (() => {
                     },
                     actors: {
                         ...key_as_key(window.dump_texts.zhs.actors),
-                        "EM7001": "原型巴哈姆特#",
                         "EM7001RAGNAROKSHOT": "原巴的橙色圆盘",  //未确认
                         "EM7001LIGHTSHOT": "原巴的光球",
                         "EM7001REDLIGHTSHOT": "原巴的红色光球",
@@ -683,7 +683,12 @@ const i18nCfg = (() => {
                     },
                     skills: {
                         ...hash_as_key(window.dump_texts.zhs.skills),
-                        "1B0D9897": "钳蟹的报恩", // wrong hash calc?
+                    },
+                    items: {
+                        ...hash_as_key(window.dump_texts.zhs.items),
+                    },
+                    weapons: {
+                        ...hash_as_key(window.dump_texts.zhs.weapons),
                     },
                 },
             },
@@ -1052,17 +1057,17 @@ const i18nCfg = (() => {
                             "1500": "四股舞",
                         },
                         "PL0700": { // 菲莉
-                            "desc": "三段蓄力X後會回到第一段(101,102)；任何蓄力攻擊收招與寵物攻擊會共用同詞條",
-                            "65": "寵物攻擊",
+                            "desc": "三段蓄力X後會回到第一段(101,102)",
+                            "-16": "寵物攻擊",
                             "100": "X",
-                            "101": "蓄力X", "101_desc": "同時爾後寵物也會計算在內",
-                            "102": "(XX~X) X", "102_desc": "第 3、6、9... 次蓄力後接X會計算在此，同時爾後寵物攻擊也會計算在內",
+                            "101": "蓄力X",
+                            "102": "(XX~X) X", "102_desc": "第 3、6、9... 次蓄力後接X會計算在此",
                             "110": "(X) X",
                             "111": "(X) 蓄力X",
-                            "112": "(~X) X", "112_desc": "第 1、4、7... 次蓄力後接X會計算在此，同時爾後寵物攻擊也會計算在內",
+                            "112": "(~X) X", "112_desc": "第 1、4、7... 次蓄力後接X會計算在此",
                             "120": "(XX) X",
                             "121": "(XX) 蓄力X", "121_desc": "第 2 次蓄力X",
-                            "122": "(X~X) X", "122_desc": "第 2、5、8... 次蓄力後接X會計算在此，同時爾後寵物攻擊也會計算在內",
+                            "122": "(X~X) X", "122_desc": "第 2、5、8... 次蓄力後接X會計算在此",
                             "200": "Y", "200_desc": "有無寵物，秒放、按住皆相同",
                             "300": "(空中) X",
                             "301": "(空中X) X",
@@ -1367,6 +1372,12 @@ const i18nCfg = (() => {
                     },
                     skills: {
                         ...hash_as_key(window.dump_texts.zht.skills),
+                    },
+                    items: {
+                        ...hash_as_key(window.dump_texts.zht.items),
+                    },
+                    weapons: {
+                        ...hash_as_key(window.dump_texts.zht.weapons),
                     },
                 },
             },
@@ -1836,6 +1847,12 @@ const i18nCfg = (() => {
                     },
                     skills: {
                         ...hash_as_key(window.dump_texts.en.skills),
+                    },
+                    items: {
+                        ...hash_as_key(window.dump_texts.en.items),
+                    },
+                    weapons: {
+                        ...hash_as_key(window.dump_texts.en.weapons),
                     },
                 }
             }
